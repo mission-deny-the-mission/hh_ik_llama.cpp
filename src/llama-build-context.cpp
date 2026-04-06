@@ -749,7 +749,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             llm_ffn_op_type   type_op,
           llm_ffn_gate_type   type_gate,
          const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input,
-         bool is_norm, ggml_tensor * add_extra) {
+         bool is_norm, ggml_tensor * add_extra, ggml_tensor * post_norm) {
 
     if (!up_b && !up_s && !gate_b && !gate_s && !down_b && !down_s &&
         up->extra && gate->extra && down->extra && type_gate == LLM_FFN_PAR &&
@@ -857,6 +857,10 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         if (down_s) {
             cur = ggml_mul(ctx, cur, down_s);
             cb(cur, "ffn_down_s", il);
+        }
+        if (post_norm) {
+            cur = llm_build_norm(ctx, cur, lctx.model.hparams, post_norm, NULL, LLM_NORM_RMS, cb, il);
+            cb(cur, "ffn_post_normed", il);
         }
         if (add_input) {
             cur = ggml_add(ctx, cur, input);
@@ -988,6 +992,11 @@ ggml_tensor * llm_build_context::llm_build_ffn(
     if (down_s) {
         cur = ggml_mul(ctx, cur, down_s);
         cb(cur, "ffn_down_s", il);
+    }
+
+    if (post_norm) {
+        cur = llm_build_norm(ctx, cur, lctx.model.hparams, post_norm, NULL, LLM_NORM_RMS, cb, il);
+        cb(cur, "ffn_post_normed", il);
     }
 
     if (add_input) {
@@ -6215,24 +6224,22 @@ ggml_cgraph * llm_build_context::build_gemma4() {
             cur = ggml_add(ctx0, cur_mlp, cur_moe);
             cb(cur, "ffn_moe_combined", il);
 
-        } else {
-            cur = llm_build_norm(ctx0, attn_out, hparams, model.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
-            cb(cur, "ffn_norm", il);
+            cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, cb, -1);
+            cb(cur, "ffn_post_norm", -1);
 
-            cur = llm_build_ffn(ctx0, lctx, nullptr, cur,
+            cur = ggml_add(ctx0, cur, attn_out);
+
+        } else {
+
+            cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, attn_out,
                     model.layers[il].ffn_up,   nullptr, nullptr,
                     model.layers[il].ffn_gate, nullptr, nullptr,
                     model.layers[il].ffn_down, nullptr, nullptr,
                     nullptr,
-                    LLM_FFN_GELU, LLM_FFN_PAR, cb, il, gf);
+                    LLM_FFN_GELU, LLM_FFN_PAR, cb, il, gf, true, false, nullptr, model.layers[il].ffn_post_norm);
             cb(cur, "ffn_out", il);
 
         }
-
-        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, cb, -1);
-        cb(cur, "ffn_post_norm", -1);
-
-        cur = ggml_add(ctx0, cur, attn_out);
 
         if (inp_per_layer) {
             ggml_tensor * pe_in = cur;

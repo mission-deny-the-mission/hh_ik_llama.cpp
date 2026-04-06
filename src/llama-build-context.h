@@ -356,7 +356,7 @@ struct llm_build_context {
             llm_ffn_op_type   type_op,
           llm_ffn_gate_type   type_gate,
          const llm_build_cb & cb, int il, ggml_cgraph * graph = nullptr, bool add_input = false,
-         bool is_norm = false, ggml_tensor * add_extra = nullptr);
+         bool is_norm = false, ggml_tensor * add_extra = nullptr, ggml_tensor * post_norm = nullptr);
 
     static ggml_tensor * llm_build_moe_ffn(ggml_context * ctx, llama_context & lctx,
          ggml_tensor * cur,
