@@ -362,6 +362,8 @@ struct llama_layer {
     struct ggml_tensor * ffn_down_scale = nullptr;
     struct ggml_tensor * out_scale = nullptr; // gemma4 layer output scale
 
+    llama_split_tensor split_out_scale;
+
     struct llama_layer_nextn nextn;
 
     std::unique_ptr<ggml_tensor> computed_wk_b;

@@ -6111,6 +6111,10 @@ static ggml_cgraph * build_gemma4_graph_paralle(llm_build_context & llm, llama_c
                     GGML_ASSERT(add);
                 }
                 sa_inp[id] = ggml_add(ctx0, cur, add);
+                if (model.layers[il-1].out_scale) {
+                    auto scale = (const ggml_split_tensor_t *)model.layers[il-1].out_scale->extra;
+                    sa_inp[id] = ggml_mul(ctx0, sa_inp[id], scale->splits[id]);
+                }
                 //auto add = get_input_tensor_sm_graph(ctx0, last_ffn_inp, id);
                 //cur = ggml_add(ctx0, cur, add);
                 //sa_inp[id] = ggml_add(ctx0, cur, add);
@@ -6132,7 +6136,7 @@ static ggml_cgraph * build_gemma4_graph_paralle(llm_build_context & llm, llama_c
             Qcur = ggml_reshape_3d(ctx0, Qcur, hparams.n_embd_head_k(il), Qcur->ne[0]/hparams.n_embd_head_k(il), n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, hparams.n_embd_head_k(il), Kcur->ne[0]/hparams.n_embd_head_k(il), n_tokens);
             Qcur = llm.llm_build_norm(ctx0, Qcur, hparams, q_norm->splits[id], NULL, LLM_NORM_RMS, cb, il_cb);
-            Kcur = llm.llm_build_norm(ctx0, Kcur, hparams, q_norm->splits[id], NULL, LLM_NORM_RMS, cb, il_cb);
+            Kcur = llm.llm_build_norm(ctx0, Kcur, hparams, k_norm->splits[id], NULL, LLM_NORM_RMS, cb, il_cb);
             if (!Vcur) {
                 Vcur = Kcur;
             }
@@ -6277,6 +6281,11 @@ static ggml_cgraph * build_gemma4_graph_paralle(llm_build_context & llm, llama_c
         }
     }
     cur = ggml_add(ctx0, cur, add);
+
+    if (model.layers[hparams.n_layer-1].out_scale) {
+        auto scale = (const ggml_split_tensor_t *)model.layers[hparams.n_layer-1].out_scale->extra;
+        cur = ggml_mul(ctx0, cur, scale->splits[idx]);
+    }
 
     cur = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
     if (hparams.f_final_logit_softcapping > 0) {
@@ -6533,6 +6542,10 @@ ggml_cgraph * llm_build_context::build_gemma4() {
 
         // layer_scalar
         if (model.layers[il].out_scale) {
+            //if (ggml_backend_buffer_is_host(model.layers[il].out_scale->buffer)) {
+            //    auto val = (const float *)model.layers[il].out_scale->data;
+            //    printf("Layer %d: out_scale = %g\n", il, val[0]);
+            //}
             cur = ggml_mul(ctx0, cur, model.layers[il].out_scale);
             cb(cur, "out_scaled", il);
         }

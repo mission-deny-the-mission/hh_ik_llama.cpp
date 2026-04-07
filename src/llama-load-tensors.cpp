@@ -4398,6 +4398,10 @@ bool create_tensors_helper::create_tensors() {
                     prepare_split_tensors(-1, ctx_split, layer.ffn_exp_probs_b, layer.split_ffn_exp_probs_b, shared_split, mem_used);
                 }
             }
+
+            if (layer.out_scale) {
+                prepare_split_tensors(-1, ctx_split, layer.out_scale, layer.split_out_scale, std::vector<int>(model.splits.size(), 1), mem_used);
+            }
         }
 
         if (!gpu_split_count.empty()) {
