@@ -6135,18 +6135,18 @@ static ggml_cgraph * build_gemma4_graph_paralle(llm_build_context & llm, llama_c
             }
             Qcur = ggml_reshape_3d(ctx0, Qcur, hparams.n_embd_head_k(il), Qcur->ne[0]/hparams.n_embd_head_k(il), n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, hparams.n_embd_head_k(il), Kcur->ne[0]/hparams.n_embd_head_k(il), n_tokens);
-            Qcur = llm.llm_build_norm(ctx0, Qcur, hparams, q_norm->splits[id], NULL, LLM_NORM_RMS, cb, il_cb);
-            Kcur = llm.llm_build_norm(ctx0, Kcur, hparams, k_norm->splits[id], NULL, LLM_NORM_RMS, cb, il_cb);
             if (!Vcur) {
                 Vcur = Kcur;
             }
+            Qcur = llm.llm_build_norm(ctx0, Qcur, hparams, q_norm->splits[id], NULL, LLM_NORM_RMS, cb, il_cb);
+            Kcur = llm.llm_build_norm(ctx0, Kcur, hparams, k_norm->splits[id], NULL, LLM_NORM_RMS, cb, il_cb);
+            Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
 
             auto rope_factors = freq_factors ? ((const ggml_split_tensor_t *)freq_factors->extra)->splits[id] : nullptr;
             Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors, n_rot_l, llm.rope_type, llm.n_ctx_orig, freq_base_l, freq_scale_l,
                                 llm.ext_factor, llm.attn_factor, llm.beta_fast, llm.beta_slow);
             Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors, n_rot_l, llm.rope_type, llm.n_ctx_orig, freq_base_l, freq_scale_l,
                                 llm.ext_factor, llm.attn_factor, llm.beta_fast, llm.beta_slow);
-            Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
 
             const int64_t n_embd_head_k = hparams.n_embd_head_k(il);
             const int64_t n_embd_head_v = hparams.n_embd_head_v(il);
