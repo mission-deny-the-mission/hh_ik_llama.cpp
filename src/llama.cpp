@@ -6393,6 +6393,7 @@ bool llama_save_session_file(struct llama_context * ctx, const char * path_sessi
 }
 
 static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor, const llama_layer & l) {
+    if (!l.wv) return l.wk;
     bool use_V_for_K = l.attn_k_norm && l.attn_k_norm->ne[0] == l.wk->ne[1] ? true : false;
     auto kv = tensor->ne[1] > 1 && !use_V_for_K ? l.wk : l.wv;
     return kv;
