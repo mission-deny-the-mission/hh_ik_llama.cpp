@@ -4076,6 +4076,7 @@ bool create_tensors_helper::create_tensors() {
         const int n_layer = model.mtp ? model.layers.size()
                                   : model.layers.size() - model.hparams.nextn_predict_layers;
         LLAMA_LOG_INFO("================================ max_gpu = %d\n", model.max_gpu);
+        std::vector<int> mirror(model.splits.size(), 1);
         std::vector<size_t> mem_used(model.splits.size(), 0);
         const auto & hparams = model.hparams;
         auto cur_splits = model.splits;
@@ -4130,11 +4131,10 @@ bool create_tensors_helper::create_tensors() {
             auto & layer = model.layers[il];
             auto ctx_split = ctx_for_layer_split(il);
             if (layer.attn_norm) {
-                auto split = create_split(ggml_nrows(layer.attn_norm), -1, cur_splits, mem_used);
-                prepare_split_tensors(-1, ctx_split, layer.attn_norm, layer.split_attn_norm, split, mem_used);
-                if (model.arch == LLM_ARCH_GEMMA4 && layer.attn_post_norm) {
-                    prepare_split_tensors(-1, ctx_split, layer.attn_post_norm, layer.split_attn_post_norm, split, mem_used);
-                }
+                prepare_split_tensors(-1, ctx_split, layer.attn_norm, layer.split_attn_norm, mirror, mem_used);
+            }
+            if (model.arch == LLM_ARCH_GEMMA4 && layer.attn_post_norm) {
+                prepare_split_tensors(-1, ctx_split, layer.attn_post_norm, layer.split_attn_post_norm, mirror, mem_used);
             }
             if (layer.rope_freqs) {
                 auto split = create_split(ggml_nrows(layer.rope_freqs), -1, cur_splits, mem_used);
@@ -4260,14 +4260,12 @@ bool create_tensors_helper::create_tensors() {
 
             if (layer.ffn_norm) {
                 if (auto it = split_tensors.find(layer.ffn_norm); it != split_tensors.end()) {
-                    auto split = create_split(ggml_nrows(layer.ffn_norm), -1, cur_splits, mem_used);
-                    prepare_split_tensors(-1, ctx_split, layer.ffn_norm, layer.split_ffn_norm, split, mem_used);
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_norm, layer.split_ffn_norm, mirror, mem_used);
                 }
             }
             if (layer.ffn_post_norm) {
                 if (auto it = split_tensors.find(layer.ffn_post_norm); it != split_tensors.end()) {
-                    auto split = create_split(ggml_nrows(layer.ffn_post_norm), -1, cur_splits, mem_used);
-                    prepare_split_tensors(-1, ctx_split, layer.ffn_post_norm, layer.split_ffn_post_norm, split, mem_used);
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_post_norm, layer.split_ffn_post_norm, mirror, mem_used);
                 }
             }
 
