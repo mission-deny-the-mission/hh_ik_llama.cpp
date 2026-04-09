@@ -4057,12 +4057,6 @@ bool create_tensors_helper::create_tensors() {
         if (model.tok_embd_per_layer) {
             supported = false;
         }
-        //for (auto & l : model.layers) {
-        //    if (l.ffn_gate_inp) {
-        //        supported = false;
-        //        break;
-        //    }
-        //}
         if (!supported) {
             LLAMA_LOG_WARN("\n=========================================================\n");
             LLAMA_LOG_WARN("Split mode 'graph' is not supported for this Gemma4 variant\n");
