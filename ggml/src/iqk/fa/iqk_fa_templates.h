@@ -1154,9 +1154,14 @@ struct FlashQKV {
                 S += expf(s - fms.M[j]);
             }
         }
-        GGML_ASSERT(S > 0);
+        if (S <= 0) {
+            // All keys were masked (e.g. this sequence sees no valid KV entries yet,
+            // which happens during multi-sequence batched prefill with np>1).
+            // Output zeros rather than asserting, matching the non-template FA path.
+            std::memset(qkv, 0, D * sizeof(float));
+            return;
+        }
         auto norm = F16::set1(1/S);
-        //auto norm = F16::set1(fms.S[j] > 0 ? 1/fms.S[j] : 0.f);
         for (int i = 0; i < D/F16::block_size; ++i) {
             auto r = F16::load(R + F16::block_size*i);
             F16::store(qkv + F16::block_size*i, F16::mul(norm, r));

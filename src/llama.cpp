@@ -562,6 +562,8 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     if (u_batch.n_tokens > 1) return false;
     if (u_batch.embd) return false;
     if (!cparams.graph_reuse) return false;
+    // Graph cache tracks a single all_seq_id; unsafe with multiple active sequences.
+    if (cparams.n_seq_max > 1) return false;
     return u_batch.all_seq_id == prev->all_seq_id &&
            kv_self.head > 0 &&
            kv_self.n == prev->n_kv &&
@@ -5418,6 +5420,12 @@ struct llama_context * llama_init_from_model(
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
     //cparams.split_mode_f16   = params.split_mode_f16;
     cparams.scheduler_async  = params.scheduler_async;
+    // The async graph scheduler was designed for np=1 only; disable it when
+    // multiple sequences are active to avoid stale-graph races and incorrect output.
+    // Single-sequence performance is unaffected. (See issue #1149.)
+    if (cparams.n_seq_max > 1) {
+        cparams.scheduler_async = false;
+    }
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
