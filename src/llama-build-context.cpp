@@ -4097,6 +4097,7 @@ ggml_cgraph * llm_build_context::build_lfm2() {
             cb(cur, "ffn_out", il);
         } else {
             // MoE FFN with softmax gating (norm_topk_prob controlled by expert_weights_norm)
+            ggml_tensor * ffn_inp = cur;  // save pre-norm for residual
             cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
             cur = llm_build_moe_ffn(ctx0, lctx, cur,
@@ -4109,7 +4110,8 @@ ggml_cgraph * llm_build_context::build_lfm2() {
                     LLM_FFN_SILU, hparams.expert_weights_norm,
                     false, 0.0f,
                     LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    cb, il, gf, true);
+                    cb, il, gf, false);
+            cur = ggml_add(ctx0, cur, ffn_inp);
             cb(cur, "ffn_moe_out", il);
         }
 

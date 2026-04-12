@@ -5191,21 +5191,26 @@ def split_str_to_n_bytes(split_str: str) -> int:
 
 @Model.register("Lfm2ForCausalLM")
 @Model.register("LFM2ForCausalLM")
+@Model.register("Lfm2MoeForCausalLM")
 class LFM2Model(Model):
     model_arch = gguf.MODEL_ARCH.LFM2
 
     _experts: list[dict[str, Tensor]] | None = None
 
     def _add_feed_forward_length(self):
-        ff_dim = self.hparams["block_ff_dim"]
-        auto_adjust_ff_dim = self.hparams["block_auto_adjust_ff_dim"]
-        ffn_dim_multiplier = self.hparams["block_ffn_dim_multiplier"]
-        multiple_of = self.hparams["block_multiple_of"]
-        if auto_adjust_ff_dim:
-            ff_dim = int(2 * ff_dim / 3)
-            if ffn_dim_multiplier is not None:
-                ff_dim = int(ffn_dim_multiplier * ff_dim)
-            ff_dim = multiple_of * ((ff_dim + multiple_of - 1) // multiple_of)
+        # MoE variant uses intermediate_size directly; dense variant uses block_ff_dim + adjustments
+        if "block_ff_dim" in self.hparams:
+            ff_dim = self.hparams["block_ff_dim"]
+            auto_adjust_ff_dim = self.hparams["block_auto_adjust_ff_dim"]
+            ffn_dim_multiplier = self.hparams["block_ffn_dim_multiplier"]
+            multiple_of = self.hparams["block_multiple_of"]
+            if auto_adjust_ff_dim:
+                ff_dim = int(2 * ff_dim / 3)
+                if ffn_dim_multiplier is not None:
+                    ff_dim = int(ffn_dim_multiplier * ff_dim)
+                ff_dim = multiple_of * ((ff_dim + multiple_of - 1) // multiple_of)
+        else:
+            ff_dim = self.hparams["intermediate_size"]
         self.gguf_writer.add_feed_forward_length(ff_dim)
 
     def set_gguf_parameters(self):
@@ -5230,30 +5235,42 @@ class LFM2Model(Model):
             if norm_topk_prob:
                 self.gguf_writer.add_expert_weights_norm(norm_topk_prob)
 
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
+        # ggml_ssm_conv requires conv kernel to be F32
+        if "shortconv.conv" in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return False
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # conv op requires 2d tensor
         if 'conv.conv' in name:
             data_torch = data_torch.squeeze(1)
 
         # Stack per-expert tensors into merged 3d tensors
+        # HF uses w1=gate, w2=down, w3=up naming
         if bid is not None and "feed_forward.experts." in name:
             n_experts = self.hparams.get("num_experts", 0)
             assert n_experts > 0
             if self._experts is None:
                 self._experts = [{} for _ in range(self.block_count)]
             self._experts[bid][name] = data_torch
-            # Each layer has gate_proj, up_proj, down_proj × n_experts = 3*n_experts tensors
+            # Each layer has w1, w2, w3 × n_experts = 3*n_experts tensors
             if len(self._experts[bid]) >= n_experts * 3:
                 tensors: list[tuple[str, Tensor]] = []
-                for proj in ["gate_proj", "up_proj", "down_proj"]:
+                # w1=gate_proj, w2=down_proj, w3=up_proj
+                for wid in ["w1", "w2", "w3"]:
                     stacked = torch.stack([
-                        self._experts[bid].pop(f"model.layers.{bid}.feed_forward.experts.{eid}.{proj}.weight")
+                        self._experts[bid].pop(f"model.layers.{bid}.feed_forward.experts.{eid}.{wid}.weight")
                         for eid in range(n_experts)
                     ], dim=0)
-                    merged_name = f"model.layers.{bid}.feed_forward.experts.{proj}.weight"
+                    # Use mixtral-compatible merged name so tensor_mapping picks it up
+                    merged_name = f"layers.{bid}.feed_forward.experts.{wid}.weight"
                     tensors.append((self.map_tensor_name(merged_name), stacked))
                 return tensors
             return []
+
+        if name.endswith(".expert_bias"):
+            name = name.replace(".expert_bias", ".expert_bias.bias")
 
         return [(self.map_tensor_name(name), data_torch)]
 
