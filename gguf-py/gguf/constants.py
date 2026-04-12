@@ -224,6 +224,8 @@ class MODEL_ARCH(IntEnum):
     QWEN2MOE     = auto()
     QWEN3        = auto()
     QWEN3MOE     = auto()
+    QWEN35       = auto()
+    QWEN35MOE    = auto()
     PHI2         = auto()
     PHI3         = auto()
     PLAMO        = auto()
@@ -244,6 +246,7 @@ class MODEL_ARCH(IntEnum):
     ARCTIC       = auto()
     DEEPSEEK2    = auto()
     GLM4_MOE     = auto()
+    GLM_DSA      = auto()
     CHATGLM      = auto()
     BITNET       = auto()
     BITNET_25    = auto()
@@ -291,6 +294,7 @@ class MODEL_TENSOR(IntEnum):
     FFN_GATE_EXP         = auto()
     FFN_DOWN_EXP         = auto()
     FFN_UP_EXP           = auto()
+    FFN_GATE_UP_EXPS     = auto()
     FFN_GATE_SHEXP       = auto()
     FFN_DOWN_SHEXP       = auto()
     FFN_UP_SHEXP         = auto()
@@ -305,6 +309,10 @@ class MODEL_TENSOR(IntEnum):
     SSM_A                = auto()
     SSM_D                = auto()
     SSM_OUT              = auto()
+    SSM_NORM             = auto()
+    SSM_BETA             = auto()
+    SSM_ALPHA            = auto()
+    ATTN_GATE            = auto()
     ATTN_Q_A             = auto()
     ATTN_Q_B             = auto()
     ATTN_KV_A_MQA        = auto()
@@ -349,6 +357,10 @@ class MODEL_TENSOR(IntEnum):
     NEXTN_HNORM          = auto()   # nextn tensors (glm4moe)
     NEXTN_SHARED_HEAD_HEAD = auto() # nextn tensors (glm4moe)
     NEXTN_SHARED_HEAD_NORM = auto() # nextn tensors (glm4moe)
+    INDEXER_K_NORM    = auto()   # DSA indexer (glm-dsa)
+    INDEXER_PROJ      = auto()   # DSA indexer (glm-dsa)
+    INDEXER_ATTN_K    = auto()   # DSA indexer (glm-dsa)
+    INDEXER_ATTN_Q_B  = auto()   # DSA indexer (glm-dsa)
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -373,6 +385,8 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN2MOE:       "qwen2moe",
     MODEL_ARCH.QWEN3:          "qwen3",
     MODEL_ARCH.QWEN3MOE:       "qwen3moe",
+    MODEL_ARCH.QWEN35:         "qwen35",
+    MODEL_ARCH.QWEN35MOE:      "qwen35moe",
     MODEL_ARCH.PHI2:           "phi2",
     MODEL_ARCH.PHI3:           "phi3",
     MODEL_ARCH.PLAMO:          "plamo",
@@ -394,6 +408,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.DEEPSEEK2:      "deepseek2",
     MODEL_ARCH.CHATGLM:        "chatglm",
     MODEL_ARCH.GLM4_MOE:       "glm4moe",
+    MODEL_ARCH.GLM_DSA:        "glm-dsa",
     MODEL_ARCH.BITNET:         "bitnet",
     MODEL_ARCH.BITNET_25:      "bitnet-25",
     MODEL_ARCH.T5:             "t5",
@@ -446,6 +461,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_GATE_EXP:         "blk.{bid}.ffn_gate_exps",
     MODEL_TENSOR.FFN_DOWN_EXP:         "blk.{bid}.ffn_down_exps",
     MODEL_TENSOR.FFN_UP_EXP:           "blk.{bid}.ffn_up_exps",
+    MODEL_TENSOR.FFN_GATE_UP_EXPS:     "blk.{bid}.ffn_gate_up_exps",
     MODEL_TENSOR.FFN_EXP_PROBS_B:      "blk.{bid}.exp_probs_b",
     MODEL_TENSOR.LAYER_OUT_NORM:       "blk.{bid}.layer_output_norm",
     MODEL_TENSOR.SSM_IN:               "blk.{bid}.ssm_in",
@@ -455,6 +471,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_A:                "blk.{bid}.ssm_a",
     MODEL_TENSOR.SSM_D:                "blk.{bid}.ssm_d",
     MODEL_TENSOR.SSM_OUT:              "blk.{bid}.ssm_out",
+    MODEL_TENSOR.SSM_NORM:             "blk.{bid}.ssm_norm",
+    MODEL_TENSOR.SSM_BETA:             "blk.{bid}.ssm_beta",
+    MODEL_TENSOR.SSM_ALPHA:            "blk.{bid}.ssm_alpha",
+    MODEL_TENSOR.ATTN_GATE:            "blk.{bid}.attn_gate",
     MODEL_TENSOR.ATTN_Q_A:             "blk.{bid}.attn_q_a",
     MODEL_TENSOR.ATTN_Q_B:             "blk.{bid}.attn_q_b",
     MODEL_TENSOR.ATTN_KV_A_MQA:        "blk.{bid}.attn_kv_a_mqa",
@@ -500,6 +520,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_HNORM:               "blk.{bid}.nextn.hnorm",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.nextn.shared_head_head",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
+    MODEL_TENSOR.INDEXER_K_NORM:            "blk.{bid}.indexer.k_norm",
+    MODEL_TENSOR.INDEXER_PROJ:              "blk.{bid}.indexer.proj",
+    MODEL_TENSOR.INDEXER_ATTN_K:            "blk.{bid}.indexer.attn_k",
+    MODEL_TENSOR.INDEXER_ATTN_Q_B:          "blk.{bid}.indexer.attn_q_b",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -812,6 +836,77 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.QWEN35: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_ALPHA,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.QWEN35MOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_ALPHA,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_INP_SHEXP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_UP_EXPS,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
     ],
     MODEL_ARCH.PLAMO: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -1144,6 +1239,43 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_SHEXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
         # NextN/MTP tensors - preserved but unused
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.GLM_DSA: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_KV_B,
+        MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V_B,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.INDEXER_K_NORM,
+        MODEL_TENSOR.INDEXER_PROJ,
+        MODEL_TENSOR.INDEXER_ATTN_K,
+        MODEL_TENSOR.INDEXER_ATTN_Q_B,
         MODEL_TENSOR.NEXTN_EH_PROJ,
         MODEL_TENSOR.NEXTN_EMBED_TOKENS,
         MODEL_TENSOR.NEXTN_ENORM,

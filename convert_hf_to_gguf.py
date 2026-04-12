@@ -594,6 +594,12 @@ class Model:
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
+        if chkhsh == "1444df51289cfa8063b96f0e62b1125440111bc79a52003ea14b6eac7016fd5f":
+            # ref: https://huggingface.co/Qwen/Qwen3.5-4B
+            res = "qwen2"
+        if chkhsh == "d30d75d9059f1aa2c19359de71047b3ae408c70875e8a3ccf8c5fba56c9d8af4":
+            # ref: Qwen/Qwen3.5-35B-A3B (MoE, vocab_size=248320)
+            res = "qwen2"
         if chkhsh == "b6dc8df998e1cfbdc4eac8243701a65afe638679230920b50d6f17d81c098166":
             # ref: https://huggingface.co/allenai/OLMo-1.7-7B-hf
             res = "olmo"
@@ -2253,6 +2259,275 @@ class Qwen3Model(Qwen2Model):
 @Model.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
+
+
+@Model.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
+class Qwen35Model(Model):
+    model_arch = gguf.MODEL_ARCH.QWEN35
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Qwen3.5 VLM wraps text config; unwrap if present
+        if "text_config" in self.hparams:
+            self.hparams = {**self.hparams, **self.hparams["text_config"]}
+        mtp_layers = self.hparams.get("mtp_num_hidden_layers", 0)
+        self.block_count = self.hparams["num_hidden_layers"] + mtp_layers
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+        self._mtp_layers = mtp_layers
+        self._num_hidden = self.hparams["num_hidden_layers"]
+
+    def set_vocab(self):
+        try:
+            self._set_vocab_sentencepiece()
+        except FileNotFoundError:
+            self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        if (head_dim := hparams.get("head_dim")) is None:
+            head_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+        rope_params = hparams.get("rope_parameters", {})
+        partial_rotary = rope_params.get("partial_rotary_factor", hparams.get("partial_rotary_factor", 1.0))
+        rope_dim = int(head_dim * partial_rotary)
+        self.gguf_writer.add_rope_dimension_count(rope_dim)
+
+        # Rope parameters
+        arch_name = gguf.MODEL_ARCH_NAMES[self.model_arch]
+        if rope_params.get("rope_theta"):
+            self.gguf_writer.add_rope_freq_base(rope_params["rope_theta"])
+        # dimension_sections is required by the C++ loader (must be exactly 4 elements)
+        mrope_section = rope_params.get("mrope_section", [0])
+        mrope_section = (list(mrope_section) + [0, 0, 0, 0])[:4]
+        self.gguf_writer.add_array(f"{arch_name}.rope.dimension_sections", mrope_section)
+
+        # SSM / delta-net parameters (use raw keys where gguf-py constants are missing)
+        if "linear_key_head_dim" in hparams:
+            self.gguf_writer.add_ssm_state_size(hparams["linear_key_head_dim"])
+            n_v_heads = hparams.get("linear_num_value_heads", 48)
+            v_head_dim = hparams.get("linear_value_head_dim", hparams["linear_key_head_dim"])
+            self.gguf_writer.add_ssm_inner_size(n_v_heads * v_head_dim)
+            self.gguf_writer.add_uint32(f"{arch_name}.ssm.group_count", hparams.get("linear_num_key_heads", 16))
+            self.gguf_writer.add_ssm_time_step_rank(hparams.get("linear_num_value_heads", 48))
+        if "linear_conv_kernel_dim" in hparams:
+            self.gguf_writer.add_ssm_conv_kernel(hparams["linear_conv_kernel_dim"])
+        elif "conv_kernel_size" in hparams:
+            self.gguf_writer.add_ssm_conv_kernel(hparams["conv_kernel_size"])
+        if "full_attention_interval" in hparams:
+            self.gguf_writer.add_uint32(f"{arch_name}.full_attention_interval", hparams["full_attention_interval"])
+
+        # MTP parameters
+        if self._mtp_layers > 0:
+            self.gguf_writer.add_nextn_predict_layers(self._mtp_layers)
+
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
+        # SSM conv1d must stay F32 for the ggml SSM conv op
+        if "ssm_conv1d" in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    # Delta-net / linear attention tensor mapping (HF name suffix → GGUF name suffix)
+    _linear_attn_map = {
+        "linear_attn.A_log":              ("ssm_a", False),           # no .weight suffix
+        "linear_attn.conv1d.weight":      ("ssm_conv1d.weight", True),
+        "linear_attn.dt_bias":            ("ssm_dt.bias", True),
+        "linear_attn.in_proj_a.weight":   ("ssm_alpha.weight", True),
+        "linear_attn.in_proj_b.weight":   ("ssm_beta.weight", True),
+        "linear_attn.in_proj_qkv.weight": ("attn_qkv.weight", True),
+        "linear_attn.in_proj_z.weight":   ("attn_gate.weight", True),
+        "linear_attn.norm.weight":        ("ssm_norm.weight", True),
+        "linear_attn.out_proj.weight":    ("ssm_out.weight", True),
+    }
+
+    @staticmethod
+    def _add_residual_norm(data_torch: Tensor) -> Tensor:
+        """Qwen3.5 uses residual RMSNorm: stored weight is (w - 1), GGUF expects w."""
+        return data_torch + 1.0
+
+    def _is_residual_norm(self, name: str) -> bool:
+        """All norm weights except ssm_norm (linear_attn.norm) use residual storage."""
+        return "norm" in name and ".weight" in name and "ssm_norm" not in name and "linear_attn.norm" not in name
+
+    def _deinterleave_vheads(self, data: Tensor, dim: int = 0) -> Tensor:
+        """Deinterleave value heads from HF group-interleaved to sequential layout.
+
+        HF stores value heads grouped by key groups: [g0_v0, g0_v1, g1_v0, g1_v1, ...]
+        C++ expects them deinterleaved: [g0_v0, g1_v0, ..., g15_v0, g0_v1, ..., g15_v1]
+        """
+        import torch
+        n_k_heads = self.hparams.get("linear_num_key_heads", 16)
+        n_v_heads = self.hparams.get("linear_num_value_heads", 32)
+        gqa_ratio = n_v_heads // n_k_heads
+        if gqa_ratio <= 1:
+            return data
+        size = data.shape[dim]
+        head_v_dim = size // n_v_heads if size > n_v_heads else 1
+        if data.ndim == 1:
+            # 1D per-head vectors: [g0_v0, g0_v1, g1_v0, g1_v1, ...] → [g0_v0, g1_v0, ..., g0_v1, g1_v1, ...]
+            return data.reshape(n_k_heads, gqa_ratio).T.contiguous().reshape(-1)
+        else:
+            # Multi-dim: reshape along the specified dim, deinterleave head groups
+            shape = list(data.shape)
+            shape[dim] = n_k_heads
+            new_dims = list(range(len(shape) + 1))
+            # Insert gqa_ratio dimension after the key-head dimension
+            shape.insert(dim + 1, gqa_ratio * head_v_dim)
+            reshaped = data.reshape(shape)
+            # Split the gqa_ratio*head_v_dim into gqa_ratio and head_v_dim
+            shape2 = list(data.shape)
+            shape2[dim:dim+1] = [n_k_heads, gqa_ratio, head_v_dim]
+            reshaped = data.reshape(shape2)
+            # Swap n_k_heads and gqa_ratio dims, then flatten back
+            reshaped = reshaped.transpose(dim, dim + 1).contiguous()
+            return reshaped.reshape(data.shape)
+
+    def _deinterleave_v_portion(self, data_torch: Tensor, dim: int, q_size: int, k_size: int) -> Tensor:
+        """Deinterleave only the V portion of a QKV-concatenated tensor along dim."""
+        import torch
+        slices_before = [slice(None)] * dim
+        q_part = data_torch[slices_before + [slice(0, q_size)]]
+        k_part = data_torch[slices_before + [slice(q_size, q_size + k_size)]]
+        v_part = data_torch[slices_before + [slice(q_size + k_size, None)]]
+        v_deint = self._deinterleave_vheads(v_part, dim=dim)
+        return torch.cat([q_part, k_part, v_deint], dim=dim)
+
+    def _transform_delta_net_tensor(self, name: str, data_torch: Tensor) -> Tensor:
+        """Apply delta-net specific tensor transformations."""
+        import torch
+        n_k_heads = self.hparams.get("linear_num_key_heads", 16)
+        head_k_dim = self.hparams.get("linear_key_head_dim", 128)
+        q_size = n_k_heads * head_k_dim
+        k_size = n_k_heads * head_k_dim
+
+        if "A_log" in name:
+            data_torch = -torch.exp(data_torch)
+            data_torch = self._deinterleave_vheads(data_torch, dim=0)
+        elif "dt_bias" in name:
+            data_torch = self._deinterleave_vheads(data_torch, dim=0)
+        elif "in_proj_a" in name or "in_proj_b" in name:
+            # ssm_alpha / ssm_beta: [num_v_heads, n_embd] → deinterleave rows
+            data_torch = self._deinterleave_vheads(data_torch, dim=0)
+        elif "in_proj_qkv" in name:
+            # [qkv_dim, n_embd] in HF → deinterleave V portion rows
+            data_torch = self._deinterleave_v_portion(data_torch, dim=0, q_size=q_size, k_size=k_size)
+        elif "in_proj_z" in name:
+            # attn_gate: [v_dim, n_embd] → deinterleave rows (all V-head sized)
+            data_torch = self._deinterleave_vheads(data_torch, dim=0)
+        elif "out_proj" in name:
+            # ssm_out: [n_embd, v_dim] → deinterleave columns (input is V-head sized)
+            data_torch = self._deinterleave_vheads(data_torch, dim=1)
+        elif "conv1d" in name:
+            # ssm_conv1d: [qkv_dim, conv_kernel] → deinterleave V portion rows
+            data_torch = self._deinterleave_v_portion(data_torch, dim=0, q_size=q_size, k_size=k_size)
+        return data_torch
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip visual encoder
+        if name.startswith("model.visual.") or name.startswith("visual."):
+            return []
+
+        # Strip VLM language model prefix
+        if name.startswith("model.language_model."):
+            name = name.replace("language_model.", "")
+
+        # Remap MTP tensors to the nextn block layer
+        if name.startswith("mtp."):
+            nextn_bid = self._num_hidden
+            if name == "mtp.fc.weight":
+                return [(f"blk.{nextn_bid}.nextn.eh_proj.weight", data_torch)]
+            elif name == "mtp.pre_fc_norm_embedding.weight":
+                return [(f"blk.{nextn_bid}.nextn.enorm.weight", self._add_residual_norm(data_torch))]
+            elif name == "mtp.pre_fc_norm_hidden.weight":
+                return [(f"blk.{nextn_bid}.nextn.hnorm.weight", self._add_residual_norm(data_torch))]
+            elif name == "mtp.norm.weight":
+                return [(f"blk.{nextn_bid}.nextn.shared_head_norm.weight", self._add_residual_norm(data_torch))]
+            elif name.startswith("mtp.layers.0."):
+                suffix = name.removeprefix("mtp.layers.0.")
+                # post_attention_layernorm needs special mapping
+                if "post_attention_layernorm" in suffix:
+                    return [(f"blk.{nextn_bid}.post_attention_norm.weight", self._add_residual_norm(data_torch))]
+                new_name = f"model.layers.{nextn_bid}.{suffix}"
+                mapped = self.map_tensor_name(new_name)
+                if self._is_residual_norm(suffix):
+                    data_torch = self._add_residual_norm(data_torch)
+                return [(mapped, data_torch)]
+            else:
+                raise ValueError(f"Unknown MTP tensor: {name}")
+
+        # Apply residual norm correction before any remapping
+        if self._is_residual_norm(name):
+            data_torch = self._add_residual_norm(data_torch)
+
+        # Apply delta-net tensor transformations
+        if "linear_attn." in name:
+            data_torch = self._transform_delta_net_tensor(name, data_torch)
+
+        # Handle delta-net / linear attention tensors directly (not in gguf-py tensor map)
+        if bid is not None and "linear_attn." in name:
+            import re
+            m = re.search(r"\.linear_attn\..+", name)
+            if m:
+                suffix = m.group(0).lstrip(".")
+                if suffix in self._linear_attn_map:
+                    gguf_suffix, _ = self._linear_attn_map[suffix]
+                    return [(f"blk.{bid}.{gguf_suffix}", data_torch)]
+            raise ValueError(f"Unknown linear_attn tensor: {name}")
+
+        # Remap post_attention_layernorm → post_attention_norm (C++ expects ATTN_POST_NORM)
+        if bid is not None and "post_attention_layernorm" in name:
+            return [(f"blk.{bid}.post_attention_norm.weight", data_torch)]
+
+        new_name = self.map_tensor_name(name)
+        return [(new_name, data_torch)]
+
+
+@Model.register("Qwen3_5MoeForConditionalGeneration")
+class Qwen35MoeModel(Qwen35Model):
+    model_arch = gguf.MODEL_ARCH.QWEN35MOE
+
+    def find_hparam(self, keys: Iterable[str], optional: bool = False):
+        # Config nests params under text_config; search there too
+        text_cfg = self.hparams.get("text_config", {})
+        key = next((k for k in keys if k in self.hparams or k in text_cfg), None)
+        if key is not None:
+            return self.hparams.get(key, text_cfg.get(key))
+        if optional:
+            return None
+        raise KeyError(f"could not find any of: {keys}")
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+
+        if (n_experts := hparams.get("num_experts")) is not None:
+            self.gguf_writer.add_expert_count(n_experts)
+        if (moe_ff := hparams.get("moe_intermediate_size")) is not None:
+            self.gguf_writer.add_expert_feed_forward_length(moe_ff)
+        if (shared_ff := hparams.get("shared_expert_intermediate_size")) is not None:
+            self.gguf_writer.add_expert_shared_feed_forward_length(shared_ff)
+        if (n_experts_per_tok := hparams.get("num_experts_per_tok")) is not None:
+            self.gguf_writer.add_expert_used_count(n_experts_per_tok)
+        # One shared expert per MoE layer
+        self.gguf_writer.add_expert_shared_count(1)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip visual
+        if name.startswith("model.visual.") or name.startswith("visual."):
+            return []
+
+        # Strip language_model prefix before any further processing
+        if name.startswith("model.language_model."):
+            name = name.replace("language_model.", "")
+
+        # Skip MTP layer individual experts (C++ uses dense FFN for MTP, not MoE)
+        if name.startswith("mtp.") and "experts." in name:
+            return []
+
+        # Handle pre-merged gate_up_proj experts (3D tensor, no .weight suffix)
+        if "mlp.experts.gate_up_proj" in name and bid is not None:
+            return [(f"blk.{bid}.ffn_gate_up_exps", data_torch)]
+
+        return super().modify_tensors(data_torch, name, bid)
 
 
 @Model.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
@@ -4359,6 +4634,128 @@ class Glm4MoeModel(Model):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+@Model.register("Glm4MoeLiteForCausalLM")
+class GlmDsaModel(Model):
+    model_arch = gguf.MODEL_ARCH.GLM_DSA
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_vocab(self):
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        tokens, toktypes, tokpre = self.get_vocab_base()
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+
+        # MLA parameters
+        if "q_lora_rank" in hparams and hparams["q_lora_rank"] is not None:
+            self.gguf_writer.add_q_lora_rank(hparams["q_lora_rank"])
+        self.gguf_writer.add_kv_lora_rank(hparams["kv_lora_rank"])
+        self.gguf_writer.add_key_length(hparams["qk_nope_head_dim"] + hparams["qk_rope_head_dim"])
+        self.gguf_writer.add_value_length(hparams["v_head_dim"])
+        self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
+
+        # MoE parameters
+        if (n_routed_experts := hparams.get("n_routed_experts")) is not None:
+            self.gguf_writer.add_expert_count(n_routed_experts)
+        if (moe_intermediate_size := hparams.get("moe_intermediate_size")) is not None:
+            self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+        if (n_shared_experts := hparams.get("n_shared_experts")) is not None:
+            self.gguf_writer.add_expert_shared_count(n_shared_experts)
+        if (first_k_dense_replace := hparams.get("first_k_dense_replace")) is not None:
+            self.gguf_writer.add_leading_dense_block_count(first_k_dense_replace)
+
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+
+        if (routed_scaling_factor := hparams.get("routed_scaling_factor")) is not None:
+            self.gguf_writer.add_expert_weights_scale(routed_scaling_factor)
+        if (norm_topk_prob := hparams.get("norm_topk_prob")) is not None:
+            self.gguf_writer.add_expert_weights_norm(norm_topk_prob)
+
+        # NextN/MTP prediction layers
+        if (num_nextn := hparams.get("num_nextn_predict_layers")) is not None:
+            self.gguf_writer.add_nextn_predict_layers(num_nextn)
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Split kv_b_proj into k_b_proj and v_b_proj (MLA, same as DeepSeek2)
+        if name.endswith("kv_b_proj.weight"):
+            name_kb = name.replace("kv_b_proj", "k_b_proj")
+            name_vb = name.replace("kv_b_proj", "v_b_proj")
+
+            n_head_kv = self.hparams["num_key_value_heads"]
+            v_head_dim = self.hparams["v_head_dim"]
+            qk_nope_head_dim = self.hparams["qk_nope_head_dim"]
+
+            assert data_torch.shape[0] == n_head_kv * (v_head_dim + qk_nope_head_dim)
+
+            kv_b = data_torch.view(n_head_kv, v_head_dim + qk_nope_head_dim, data_torch.shape[-1])
+            k_b, v_b = torch.split(kv_b, [qk_nope_head_dim, v_head_dim], dim=1)
+            k_b = k_b.transpose(1, 2)
+            k_b = k_b.reshape(n_head_kv * data_torch.shape[-1], qk_nope_head_dim)
+            v_b = v_b.reshape(n_head_kv * v_head_dim, data_torch.shape[-1])
+
+            return [
+                (self.map_tensor_name(name),    data_torch),
+                (self.map_tensor_name(name_kb), k_b),
+                (self.map_tensor_name(name_vb), v_b),
+            ]
+
+        # Rename e_score_correction_bias for tensor map lookup
+        if name.endswith("e_score_correction_bias"):
+            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
+
+        # Merge routed experts into stacked tensors
+        if "mlp.experts" in name:
+            n_experts = self.hparams["n_routed_experts"]
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                    new_name = self.map_tensor_name(merged_name)
+                    tensors.append((new_name, data_torch))
+                return tensors
+            else:
+                return []
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._experts is not None:
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
 
 @Model.register("ChatGLMModel", "ChatGLMForConditionalGeneration")
 class ChatGLMModel(Model):

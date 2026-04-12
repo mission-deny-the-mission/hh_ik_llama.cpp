@@ -450,6 +450,7 @@ llm_expert_gating_func_type   gating_op,
         int64_t n_embd_head,
         struct ggml_cgraph * gf,
         struct ggml_tensor * inp_pos,
-        struct ggml_tensor * rope_cache
+        struct ggml_tensor * rope_cache,
+        bool use_dense_ffn = false
     );
 };

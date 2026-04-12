@@ -502,16 +502,25 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
                 ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
+                // NextN/MTP parameters
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+
                 // Mark recurrent layers (linear attention layers)
+                // Nextn layers are always full attention, not recurrent
                 {
                     uint32_t full_attn_interval = 4;
                     ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
                     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-                        hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
+                        if (hparams.nextn_predict_layers > 0 && i >= hparams.n_layer - hparams.nextn_predict_layers) {
+                            hparams.recurrent_layer_arr[i] = false;
+                        } else {
+                            hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
+                        }
                     }
                 }
 
-                switch (hparams.n_layer) {
+                switch (hparams.n_layer - hparams.nextn_predict_layers) {
                     case 40: model.type = e_model::MODEL_35B_A3B; break;
                     case 48: model.type = e_model::MODEL_122B_A10B; break;
                     case 60: model.type = e_model::MODEL_397B_A17B; break;
@@ -530,16 +539,25 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
                 ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
+                // NextN/MTP parameters
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+
                 // Mark recurrent layers (linear attention layers)
+                // Nextn layers are always full attention, not recurrent
                 {
                     uint32_t full_attn_interval = 4;
                     ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
                     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-                        hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
+                        if (hparams.nextn_predict_layers > 0 && i >= hparams.n_layer - hparams.nextn_predict_layers) {
+                            hparams.recurrent_layer_arr[i] = false;
+                        } else {
+                            hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
+                        }
                     }
                 }
 
-                switch (hparams.n_layer) {
+                switch (hparams.n_layer - hparams.nextn_predict_layers) {
                     case 24: model.type = hparams.n_embd == 1024 ? e_model::MODEL_0_8B : e_model::MODEL_2B; break;
                     case 32: model.type = hparams.n_embd == 2560 ? e_model::MODEL_4B   : e_model::MODEL_9B; break;
                     case 64: model.type = e_model::MODEL_27B; break;
