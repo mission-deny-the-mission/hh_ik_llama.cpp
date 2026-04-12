@@ -260,6 +260,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.gate",                # qwen2moe
             "transformer.decoder_layer.{bid}.router",     # Grok
             "transformer.blocks.{bid}.ffn.router.layer",  # dbrx
+            "model.layers.{bid}.feed_forward.gate",       # lfm2-moe
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -271,6 +272,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.moe_statics.e_score_correction",    # ernie4.5-moe
             "model.layers.{bid}.mlp.gate.expert_bias",                  # bailingmoe2
             "model.layers.{bid}.block_sparse_moe.e_score_correction",   # minimax-m2
+            "model.layers.{bid}.feed_forward.expert_bias",              # lfm2-moe
         ),
 
         # Feed-forward up
@@ -302,10 +304,11 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
-            "layers.{bid}.feed_forward.experts.w3",          # mixtral (merged)
-            "transformer.decoder_layer.{bid}.moe.linear_v",  # Grok (merged)
-            "transformer.blocks.{bid}.ffn.experts.mlp.v1",   # dbrx
-            "model.layers.{bid}.mlp.experts.up_proj",        # qwen2moe (merged)
+            "layers.{bid}.feed_forward.experts.w3",                # mixtral (merged)
+            "transformer.decoder_layer.{bid}.moe.linear_v",        # Grok (merged)
+            "transformer.blocks.{bid}.ffn.experts.mlp.v1",         # dbrx
+            "model.layers.{bid}.mlp.experts.up_proj",              # qwen2moe (merged)
+            "model.layers.{bid}.feed_forward.experts.up_proj",     # lfm2-moe (merged)
         ),
 
         MODEL_TENSOR.FFN_UP_SHEXP: (
@@ -333,10 +336,11 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
-            "layers.{bid}.feed_forward.experts.w1",         # mixtral (merged)
-            "transformer.decoder_layer.{bid}.moe.linear",   # Grok (merged)
-            "transformer.blocks.{bid}.ffn.experts.mlp.w1",  # dbrx
-            "model.layers.{bid}.mlp.experts.gate_proj",     # qwen2moe (merged)
+            "layers.{bid}.feed_forward.experts.w1",                # mixtral (merged)
+            "transformer.decoder_layer.{bid}.moe.linear",          # Grok (merged)
+            "transformer.blocks.{bid}.ffn.experts.mlp.w1",         # dbrx
+            "model.layers.{bid}.mlp.experts.gate_proj",            # qwen2moe (merged)
+            "model.layers.{bid}.feed_forward.experts.gate_proj",   # lfm2-moe (merged)
         ),
 
         MODEL_TENSOR.FFN_GATE_SHEXP: (
@@ -372,10 +376,11 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
-            "layers.{bid}.feed_forward.experts.w2",          # mixtral (merged)
-            "transformer.decoder_layer.{bid}.moe.linear_1",  # Grok (merged)
-            "transformer.blocks.{bid}.ffn.experts.mlp.w2",   # dbrx
-            "model.layers.{bid}.mlp.experts.down_proj",      # qwen2moe (merged)
+            "layers.{bid}.feed_forward.experts.w2",                # mixtral (merged)
+            "transformer.decoder_layer.{bid}.moe.linear_1",        # Grok (merged)
+            "transformer.blocks.{bid}.ffn.experts.mlp.w2",         # dbrx
+            "model.layers.{bid}.mlp.experts.down_proj",            # qwen2moe (merged)
+            "model.layers.{bid}.feed_forward.experts.down_proj",   # lfm2-moe (merged)
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (

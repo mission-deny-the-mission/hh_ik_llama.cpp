@@ -200,6 +200,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_SSM_GROUP_COUNT,               "%s.ssm.group_count"    },
 
     { LLM_KV_SHORTCONV_L_CACHE,             "%s.shortconv.l_cache"  },
+    { LLM_KV_LFM2_N_DENSE_LAYERS,          "%s.lfm2.n_dense_layers" },
 
     { LLM_KV_TOKENIZER_MODEL,                "tokenizer.ggml.model"                    },
     { LLM_KV_TOKENIZER_PRE,                  "tokenizer.ggml.pre"                      },

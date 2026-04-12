@@ -94,8 +94,9 @@ struct llama_hparams {
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
 
-    // for LFM2 shortconv
+    // for LFM2 shortconv / MoE
     uint32_t n_shortconv_l_cache = 0;
+    uint32_t n_dense_layers = 0;     // number of leading dense-FFN layers (LFM2-MoE)
 
     // for hybrid state-space models (e.g. qwen3next)
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;

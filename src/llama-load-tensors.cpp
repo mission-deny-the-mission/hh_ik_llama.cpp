@@ -3391,6 +3391,8 @@ bool create_tensors_helper::create_lfm2_tensors(const LLM_TN & tn) {
     model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
 
     const int64_t n_shortconv_l_cache = hparams.n_shortconv_l_cache;
+    const int64_t n_ff_exp            = hparams.n_ff_exp;
+    const int64_t n_dense             = hparams.n_dense_layers;
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context* ctx_layer = ctx_for_layer(i);
@@ -3400,7 +3402,18 @@ bool create_tensors_helper::create_lfm2_tensors(const LLM_TN & tn) {
         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
         layer.ffn_norm  = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM,  "weight", i), {n_embd}, 0);
 
-        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+        const bool is_moe_layer = (n_expert > 0) && (i >= (int)n_dense);
+        if (!is_moe_layer) {
+            // Dense FFN (all dense models + leading dense layers of MoE models)
+            create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+        } else {
+            // MoE FFN
+            layer.ffn_gate_inp = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, (int)n_ff_exp);
+            // expert_bias is optional (use_expert_bias may be false)
+            layer.ffn_exp_probs_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert},
+                    llama_model_loader::TENSOR_NOT_REQUIRED);
+        }
 
         if (!hparams.is_recurrent(i)) {
             layer.attn_q_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);

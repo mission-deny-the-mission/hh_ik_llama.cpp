@@ -4086,14 +4086,32 @@ ggml_cgraph * llm_build_context::build_lfm2() {
         }
         cur = ggml_add(ctx0, residual, cur);
 
-        // FFN (same for all layers)
-        cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
-                model.layers[il].ffn_up,   nullptr, nullptr,
-                model.layers[il].ffn_gate, nullptr, nullptr,
-                model.layers[il].ffn_down, nullptr, nullptr,
-                nullptr,
-                LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
-        cb(cur, "ffn_out", il);
+        // FFN: dense for all layers in base model; dense or MoE depending on layer in MoE variant
+        if (model.layers[il].ffn_gate_inp == nullptr) {
+            cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
+                    model.layers[il].ffn_up,   nullptr, nullptr,
+                    model.layers[il].ffn_gate, nullptr, nullptr,
+                    model.layers[il].ffn_down, nullptr, nullptr,
+                    nullptr,
+                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
+            cb(cur, "ffn_out", il);
+        } else {
+            // MoE FFN with softmax gating (norm_topk_prob controlled by expert_weights_norm)
+            cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
+            cb(cur, "ffn_norm", il);
+            cur = llm_build_moe_ffn(ctx0, lctx, cur,
+                    model.layers[il].ffn_gate_inp,
+                    model.layers[il].ffn_up_exps,
+                    model.layers[il].ffn_gate_exps,
+                    model.layers[il].ffn_down_exps,
+                    model.layers[il].ffn_exp_probs_b,
+                    hparams.n_expert, hparams.n_expert_used,
+                    LLM_FFN_SILU, hparams.expert_weights_norm,
+                    false, 0.0f,
+                    LLM_EXPERT_GATING_FUNC_SOFTMAX,
+                    cb, il, gf, true);
+            cb(cur, "ffn_moe_out", il);
+        }
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);

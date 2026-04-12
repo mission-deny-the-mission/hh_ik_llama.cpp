@@ -1212,6 +1212,12 @@ void llm_load_hparams(
                 for (uint32_t il = 0; il < hparams.n_layer; ++il) {
                     hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
                 }
+                // MoE params (optional – only set for MoE variants)
+                if (hparams.n_expert > 0) {
+                    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+                    ml.get_key(LLM_KV_LFM2_N_DENSE_LAYERS,        hparams.n_dense_layers);
+                    ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
+                }
                 switch (hparams.n_embd) {
                     case 1024: model.type = e_model::MODEL_350M; break;
                     case 1536: model.type = e_model::MODEL_700M; break;

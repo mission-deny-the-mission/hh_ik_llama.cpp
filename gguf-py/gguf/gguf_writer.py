@@ -652,6 +652,9 @@ class GGUFWriter:
     def add_shortconv_l_cache(self, length: int) -> None:
         self.add_uint32(Keys.ShortConv.L_CACHE.format(arch=self.arch), length)
 
+    def add_lfm2_n_dense_layers(self, n: int) -> None:
+        self.add_uint32(Keys.LFM2.N_DENSE_LAYERS.format(arch=self.arch), n)
+
     def add_block_count(self, length: int) -> None:
         self.add_uint32(Keys.LLM.BLOCK_COUNT.format(arch=self.arch), length)
 

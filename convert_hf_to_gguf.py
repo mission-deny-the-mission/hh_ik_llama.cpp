@@ -5194,6 +5194,8 @@ def split_str_to_n_bytes(split_str: str) -> int:
 class LFM2Model(Model):
     model_arch = gguf.MODEL_ARCH.LFM2
 
+    _experts: list[dict[str, Tensor]] | None = None
+
     def _add_feed_forward_length(self):
         ff_dim = self.hparams["block_ff_dim"]
         auto_adjust_ff_dim = self.hparams["block_auto_adjust_ff_dim"]
@@ -5218,10 +5220,41 @@ class LFM2Model(Model):
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams["norm_eps"])
         self._add_feed_forward_length()
 
-    def modify_tensors(self, data_torch, name, bid):
+        n_experts = self.hparams.get("num_experts", 0)
+        if n_experts > 0:
+            self.gguf_writer.add_expert_count(n_experts)
+            self.gguf_writer.add_expert_used_count(self.hparams["num_experts_per_tok"])
+            self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
+            self.gguf_writer.add_lfm2_n_dense_layers(self.hparams["num_dense_layers"])
+            norm_topk_prob = self.hparams.get("norm_topk_prob", False)
+            if norm_topk_prob:
+                self.gguf_writer.add_expert_weights_norm(norm_topk_prob)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # conv op requires 2d tensor
         if 'conv.conv' in name:
             data_torch = data_torch.squeeze(1)
+
+        # Stack per-expert tensors into merged 3d tensors
+        if bid is not None and "feed_forward.experts." in name:
+            n_experts = self.hparams.get("num_experts", 0)
+            assert n_experts > 0
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+            self._experts[bid][name] = data_torch
+            # Each layer has gate_proj, up_proj, down_proj × n_experts = 3*n_experts tensors
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+                for proj in ["gate_proj", "up_proj", "down_proj"]:
+                    stacked = torch.stack([
+                        self._experts[bid].pop(f"model.layers.{bid}.feed_forward.experts.{eid}.{proj}.weight")
+                        for eid in range(n_experts)
+                    ], dim=0)
+                    merged_name = f"model.layers.{bid}.feed_forward.experts.{proj}.weight"
+                    tensors.append((self.map_tensor_name(merged_name), stacked))
+                return tensors
+            return []
+
         return [(self.map_tensor_name(name), data_torch)]
 
 
