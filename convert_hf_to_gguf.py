@@ -2510,6 +2510,13 @@ class Qwen35MoeModel(Qwen35Model):
         # One shared expert per MoE layer
         self.gguf_writer.add_expert_shared_count(1)
 
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
+        # Pre-merged expert tensors lack .weight suffix in HF, which normally triggers F32 fallback.
+        # Return True to use the requested ftype (Q8_0 etc.) instead.
+        if any(k in new_name for k in ("ffn_gate_up_exps", "ffn_down_exps")):
+            return True
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Skip visual
         if name.startswith("model.visual.") or name.startswith("visual."):
@@ -2523,9 +2530,11 @@ class Qwen35MoeModel(Qwen35Model):
         if name.startswith("mtp.") and "experts." in name:
             return []
 
-        # Handle pre-merged gate_up_proj experts (3D tensor, no .weight suffix)
+        # Handle pre-stacked expert tensors (no .weight suffix, no expert index in HF name)
         if "mlp.experts.gate_up_proj" in name and bid is not None:
-            return [(f"blk.{bid}.ffn_gate_up_exps", data_torch)]
+            return [(f"blk.{bid}.ffn_gate_up_exps.weight", data_torch)]
+        if "mlp.experts.down_proj" in name and bid is not None:
+            return [(f"blk.{bid}.ffn_down_exps.weight", data_torch)]
 
         return super().modify_tensors(data_torch, name, bid)
 
