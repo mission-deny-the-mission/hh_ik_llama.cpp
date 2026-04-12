@@ -3988,6 +3988,129 @@ ggml_cgraph * llm_build_context::build_qwen() {
     return gf;
 }
 
+ggml_cgraph * llm_build_context::build_lfm2() {
+    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model, n_tokens), false);
+
+    const int64_t n_shortconv_l_cache = hparams.n_shortconv_l_cache;
+    const int64_t n_embd_head = hparams.n_embd_head_v(0);
+
+    ggml_tensor * cur = nullptr;
+    ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
+
+    ggml_tensor * inp_pos    = build_inp_pos();
+    ggml_tensor * KQ_mask    = build_inp_KQ_mask();
+    ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
+
+    // Set up sequence slot indexing for recurrent state (same as qwen3next)
+    lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
+    cb(lctx.inp_s_seq_qnext, "inp_s_seq_qnext", -1);
+    ggml_set_input(lctx.inp_s_seq_qnext);
+
+    float KQ_scale = 1.0f / sqrtf(float(n_embd_head));
+
+    for (int il = 0; il < n_layer; ++il) {
+        // operator_norm (pre-norm for both attn and conv blocks)
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
+        cb(cur, "attn_norm", il);
+
+        ggml_tensor * residual = inpL;
+
+        if (!hparams.is_recurrent(il)) {
+            // Full attention block - pass nullptr for attn_norm since we already applied it
+            cur = build_std_attention(gf, nullptr, cur,
+                    inp_pos, nullptr, nullptr,
+                    KQ_mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false, false, false, false);
+        } else {
+            // Shortconv block using kv_self.s_l[il] for state
+            const int64_t d_conv = n_shortconv_l_cache;
+            const int64_t d_inner = n_embd;
+
+            const uint32_t qnext_state_slots = llama_kv_qnext_state_slots(kv_self);
+            GGML_ASSERT(qnext_state_slots > 0);
+            GGML_ASSERT(kv_self.s_l[il] != nullptr);
+
+            // Read conv state from s_l[il]: {n_embd_v_s, qnext_state_slots}
+            // View the single state slot this token maps to (slot 0, like delta-net)
+            const int64_t n_state = hparams.n_embd_v_s();
+            ggml_tensor * state_flat = ggml_view_2d(ctx0, kv_self.s_l[il], n_state, 1,
+                    kv_self.s_l[il]->nb[1], 0);
+
+            // Reshape to 3D: {d_conv-1, n_embd, 1}
+            ggml_tensor * conv_states = ggml_reshape_3d(ctx0, state_flat, d_conv - 1, d_inner, 1);
+            cb(conv_states, "conv_states", il);
+
+            // in_proj: {n_embd} -> {3*n_embd}
+            ggml_tensor * bcx = llm_build_lora_mm(lctx, ctx0, model.layers[il].shortconv.in_proj, cur);
+            cb(bcx, "shortconv_in_proj", il);
+
+            const int64_t chunk_size = d_inner;
+            ggml_tensor * b = ggml_view_2d(ctx0, bcx, chunk_size, n_tokens, bcx->nb[1], 0);
+            ggml_tensor * c = ggml_view_2d(ctx0, bcx, chunk_size, n_tokens, bcx->nb[1], 1 * chunk_size * ggml_element_size(bcx));
+            ggml_tensor * x = ggml_view_2d(ctx0, bcx, chunk_size, n_tokens, bcx->nb[1], 2 * chunk_size * ggml_element_size(bcx));
+
+            // bx = b * x element-wise: {n_embd, n_tokens}
+            ggml_tensor * bx = ggml_mul(ctx0, b, x);
+
+            // Apply ssm_conv: takes state {d_conv-1, n_embd, 1},
+            //                 input {n_embd, n_tokens}, kernel {d_conv, n_embd}, seq_ids {1, n_tokens}
+            ggml_tensor * x_conv = ggml_ssm_conv(ctx0, conv_states, bx,
+                    model.layers[il].shortconv.conv, lctx.inp_s_seq_qnext);
+            cb(x_conv, "x_conv", il);
+
+            // Store new conv state back to s_l[il] (slot 0)
+            ggml_build_forward_expand(gf,
+                ggml_cpy(ctx0,
+                    ggml_view_2d(ctx0, x_conv, d_conv - 1, d_inner,
+                        d_conv * ggml_element_size(x_conv),
+                        (1 + d_inner * n_tokens) * ggml_element_size(x_conv)),
+                    ggml_view_1d(ctx0, kv_self.s_l[il],
+                        (d_conv - 1) * d_inner,
+                        0)));
+
+            // Extract conv output for tokens: {n_embd, n_tokens}
+            ggml_tensor * conv_out = ggml_view_2d(ctx0, x_conv, d_inner, n_tokens,
+                    d_inner * ggml_element_size(x_conv), 0);
+
+            // Gate: y = c * conv_out
+            cur = ggml_mul(ctx0, c, conv_out);
+
+            // out_proj
+            cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].shortconv.out_proj, cur);
+            cb(cur, "shortconv_out", il);
+        }
+
+        // Residual connection
+        if (il == n_layer - 1 && inp_out_ids) {
+            cur      = ggml_get_rows(ctx0, cur,      inp_out_ids);
+            residual = ggml_get_rows(ctx0, residual, inp_out_ids);
+        }
+        cur = ggml_add(ctx0, residual, cur);
+
+        // FFN (same for all layers)
+        cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
+                model.layers[il].ffn_up,   nullptr, nullptr,
+                model.layers[il].ffn_gate, nullptr, nullptr,
+                model.layers[il].ffn_down, nullptr, nullptr,
+                nullptr,
+                LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
+        cb(cur, "ffn_out", il);
+
+        cur = lctx.cvec.apply_to(ctx0, cur, il);
+        cb(cur, "l_out", il);
+        inpL = cur;
+    }
+
+    cur = llm_build_norm(ctx0, inpL, hparams, model.tok_norm, NULL, LLM_NORM_RMS, cb, -1);
+    cb(cur, "result_norm", -1);
+
+    // lm_head tied with tok_embd
+    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
+    cb(cur, "result_output", -1);
+
+    ggml_build_forward_expand(gf, cur);
+    return gf;
+}
+
 ggml_cgraph * llm_build_context::build_qwen2() {
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model, n_tokens), false);
 
@@ -10841,6 +10964,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_STEP35:
             {
                 result = llm.build_step35();
+            } break;
+        case LLM_ARCH_LFM2:
+            {
+                result = llm.build_lfm2();
             } break;
         default:
             GGML_ABORT("fatal error");

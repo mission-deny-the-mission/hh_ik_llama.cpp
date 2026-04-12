@@ -1204,6 +1204,21 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_LFM2:
+            {
+                ml.get_key(LLM_KV_SHORTCONV_L_CACHE, hparams.n_shortconv_l_cache);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                // Determine recurrent layers: those with n_head_kv == 0
+                for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                    hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
+                }
+                switch (hparams.n_embd) {
+                    case 1024: model.type = e_model::MODEL_350M; break;
+                    case 1536: model.type = e_model::MODEL_700M; break;
+                    case 2048: model.type = e_model::MODEL_1_2B; break;
+                    default:   model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
         case LLM_ARCH_MISTRAL3:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);

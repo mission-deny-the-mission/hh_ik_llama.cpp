@@ -94,6 +94,9 @@ struct llama_hparams {
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
 
+    // for LFM2 shortconv
+    uint32_t n_shortconv_l_cache = 0;
+
     // for hybrid state-space models (e.g. qwen3next)
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
 
@@ -273,6 +276,10 @@ struct llama_hparams {
     }
 
     uint32_t n_embd_v_s() const { // dimension of the recurrent state embeddings
+        if (n_shortconv_l_cache != 0) {
+            // LFM2 shortconv state: (L_cache - 1) * n_embd per sequence slot
+            return n_embd * (n_shortconv_l_cache - 1);
+        }
         if (ssm_n_group > 0) {
             // qwen3next recurrent state packs:
             // 1) conv state: (d_conv - 1) * (2 * key_dim + value_dim)

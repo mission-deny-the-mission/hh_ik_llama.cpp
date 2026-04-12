@@ -136,6 +136,12 @@ struct llama_layer_nextn {
     struct ggml_tensor * shared_head_norm = nullptr;
 };
 
+struct llama_layer_shortconv {
+    struct ggml_tensor * in_proj  = nullptr;
+    struct ggml_tensor * conv     = nullptr;
+    struct ggml_tensor * out_proj = nullptr;
+};
+
 // TODO: separate into "llama_layer_enc" and "llama_layer_dec"
 struct llama_layer {
     // normalization
@@ -342,6 +348,9 @@ struct llama_layer {
     // mamba bias
     struct ggml_tensor * ssm_conv1d_b = nullptr;
     struct ggml_tensor * ssm_dt_b = nullptr;
+
+    // shortconv (lfm2)
+    struct llama_layer_shortconv shortconv;
 
     // DSA (deepseek sparse attention)
     struct ggml_tensor * indexer_k_norm   = nullptr;

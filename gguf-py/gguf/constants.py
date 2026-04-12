@@ -143,6 +143,9 @@ class Keys:
         STATE_SIZE     = "{arch}.ssm.state_size"
         TIME_STEP_RANK = "{arch}.ssm.time_step_rank"
 
+    class ShortConv:
+        L_CACHE = "{arch}.shortconv.l_cache"
+
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"
         PRE                  = "tokenizer.ggml.pre"
@@ -259,6 +262,7 @@ class MODEL_ARCH(IntEnum):
     BAILINGMOE2  = auto()
     MINIMAXM2    = auto()
     SMOLLM3      = auto()
+    LFM2         = auto()
     SEED_OSS     = auto()
 
 class MODEL_TENSOR(IntEnum):
@@ -361,6 +365,9 @@ class MODEL_TENSOR(IntEnum):
     INDEXER_PROJ      = auto()   # DSA indexer (glm-dsa)
     INDEXER_ATTN_K    = auto()   # DSA indexer (glm-dsa)
     INDEXER_ATTN_Q_B  = auto()   # DSA indexer (glm-dsa)
+    SHORTCONV_CONV    = auto()   # shortconv (lfm2)
+    SHORTCONV_INPROJ  = auto()   # shortconv (lfm2)
+    SHORTCONV_OUTPROJ = auto()   # shortconv (lfm2)
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -420,6 +427,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.BAILINGMOE2:    "bailingmoe2",
     MODEL_ARCH.MINIMAXM2:      "minimax-m2",
     MODEL_ARCH.SMOLLM3:        "smollm3",
+    MODEL_ARCH.LFM2:           "lfm2",
     MODEL_ARCH.SEED_OSS:       "seed_oss",
 }
 
@@ -464,6 +472,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_GATE_UP_EXPS:     "blk.{bid}.ffn_gate_up_exps",
     MODEL_TENSOR.FFN_EXP_PROBS_B:      "blk.{bid}.exp_probs_b",
     MODEL_TENSOR.LAYER_OUT_NORM:       "blk.{bid}.layer_output_norm",
+    MODEL_TENSOR.SHORTCONV_CONV:       "blk.{bid}.shortconv.conv",
+    MODEL_TENSOR.SHORTCONV_INPROJ:     "blk.{bid}.shortconv.in_proj",
+    MODEL_TENSOR.SHORTCONV_OUTPROJ:    "blk.{bid}.shortconv.out_proj",
     MODEL_TENSOR.SSM_IN:               "blk.{bid}.ssm_in",
     MODEL_TENSOR.SSM_CONV1D:           "blk.{bid}.ssm_conv1d",
     MODEL_TENSOR.SSM_X:                "blk.{bid}.ssm_x",
@@ -1501,6 +1512,24 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.LFM2: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.SHORTCONV_CONV,
+        MODEL_TENSOR.SHORTCONV_INPROJ,
+        MODEL_TENSOR.SHORTCONV_OUTPROJ,
     ],
     MODEL_ARCH.SEED_OSS: [
         MODEL_TENSOR.TOKEN_EMBD,

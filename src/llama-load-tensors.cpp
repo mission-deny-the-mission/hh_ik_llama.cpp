@@ -153,6 +153,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_step35_tensors(const LLM_TN & tn);
 
+    bool create_lfm2_tensors(const LLM_TN & tn);
+
     llama_model_loader & ml;
     llama_model        & model;
 
@@ -3380,6 +3382,42 @@ bool create_tensors_helper::create_smollm3_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
+bool create_tensors_helper::create_lfm2_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+
+    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_norm = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd});
+    // lm_head tied with tok_embd
+    model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+
+    const int64_t n_shortconv_l_cache = hparams.n_shortconv_l_cache;
+
+    for (int i = 0; i < n_layer; ++i) {
+        ggml_context* ctx_layer = ctx_for_layer(i);
+        ggml_context* ctx_split = ctx_for_layer_split(i);
+        auto & layer = model.layers[i];
+
+        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+        layer.ffn_norm  = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM,  "weight", i), {n_embd}, 0);
+
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+
+        if (!hparams.is_recurrent(i)) {
+            layer.attn_q_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
+            layer.attn_k_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+            layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd}, 0);
+            layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, (int64_t) hparams.n_embd_k_gqa(i)}, 0);
+            layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, (int64_t) hparams.n_embd_v_gqa(i)}, 0);
+            layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+        } else {
+            layer.shortconv.conv     = create_tensor(ctx_split, tn(LLM_TENSOR_SHORTCONV_CONV,    "weight", i), {n_shortconv_l_cache, n_embd}, 0);
+            layer.shortconv.in_proj  = create_tensor(ctx_split, tn(LLM_TENSOR_SHORTCONV_INPROJ,  "weight", i), {n_embd, 3 * n_embd}, 0);
+            layer.shortconv.out_proj = create_tensor(ctx_split, tn(LLM_TENSOR_SHORTCONV_OUTPROJ, "weight", i), {n_embd, n_embd}, 0);
+        }
+    }
+    return use_mmap_buffer;
+}
+
 bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bias) {
     ggml_context * ctx_split = ctx_for_layer_split(i);
 
@@ -4084,6 +4122,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_seedoss_tensors(tn); break;
         case LLM_ARCH_STEP35:
             use_mmap_buffer = create_step35_tensors(tn); break;
+        case LLM_ARCH_LFM2:
+            use_mmap_buffer = create_lfm2_tensors(tn); break;
         default:
             throw std::runtime_error("unknown architecture");
     }
