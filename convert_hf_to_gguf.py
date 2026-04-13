@@ -2276,6 +2276,16 @@ class Qwen35Model(Model):
         self._mtp_layers = mtp_layers
         self._num_hidden = self.hparams["num_hidden_layers"]
 
+    def find_hparam(self, keys: Iterable[str], optional: bool = False):
+        # VLM config nests text params under text_config; search there too
+        text_cfg = self.hparams.get("text_config", {})
+        key = next((k for k in keys if k in self.hparams or k in text_cfg), None)
+        if key is not None:
+            return self.hparams.get(key, text_cfg.get(key))
+        if optional:
+            return None
+        raise KeyError(f"could not find any of: {keys}")
+
     def set_vocab(self):
         try:
             self._set_vocab_sentencepiece()
@@ -2476,16 +2486,6 @@ class Qwen35Model(Model):
 @Model.register("Qwen3_5MoeForConditionalGeneration")
 class Qwen35MoeModel(Qwen35Model):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
-
-    def find_hparam(self, keys: Iterable[str], optional: bool = False):
-        # Config nests params under text_config; search there too
-        text_cfg = self.hparams.get("text_config", {})
-        key = next((k for k in keys if k in self.hparams or k in text_cfg), None)
-        if key is not None:
-            return self.hparams.get(key, text_cfg.get(key))
-        if optional:
-            return None
-        raise KeyError(f"could not find any of: {keys}")
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
