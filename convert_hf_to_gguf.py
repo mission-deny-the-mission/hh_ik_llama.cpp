@@ -2530,6 +2530,11 @@ class Qwen35MoeModel(Qwen35Model):
         if name.startswith("mtp."):
             return []
 
+        # Skip tensors for layers beyond the main transformer stack (MTP block stored as model.layers.40)
+        num_layers = self.find_hparam(["num_hidden_layers"], optional=True) or 40
+        if bid is not None and bid >= num_layers:
+            return []
+
         # Handle pre-stacked expert tensors (no .weight suffix, no expert index in HF name)
         if "mlp.experts.gate_up_proj" in name and bid is not None:
             return [(f"blk.{bid}.ffn_gate_up_exps.weight", data_torch)]
