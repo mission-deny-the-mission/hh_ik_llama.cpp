@@ -2526,8 +2526,8 @@ class Qwen35MoeModel(Qwen35Model):
         if name.startswith("model.language_model."):
             name = name.replace("language_model.", "")
 
-        # Skip MTP layer individual experts (C++ uses dense FFN for MTP, not MoE)
-        if name.startswith("mtp.") and "experts." in name:
+        # Skip all MTP tensors — C++ QWEN35MOE loader doesn't support the MTP block
+        if name.startswith("mtp."):
             return []
 
         # Handle pre-stacked expert tensors (no .weight suffix, no expert index in HF name)
