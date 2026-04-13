@@ -895,7 +895,8 @@ static bool llama_kv_cache_init(
             n_mla++;
         }
         else {
-            if (!hparams.has_kv(i) && !(cparams.mtp_op_type != MTP_OP_NONE && i >= (int)n_mtp_first_layer)) {
+            const bool is_mtp_kv_layer = cparams.mtp_op_type != MTP_OP_NONE && i >= (int)n_mtp_first_layer;
+            if (!hparams.has_kv(i) && !is_mtp_kv_layer) {
                 cache.k_l.push_back(nullptr);
                 cache.v_l.push_back(nullptr);
                 continue;
@@ -5338,6 +5339,11 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
     }
 }
 
+static bool arch_supports_mtp(llm_arch arch) {
+    return arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_QWEN35
+        || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_GLM_DSA;
+}
+
 struct llama_context * llama_init_from_model(
                  struct llama_model * model,
         struct llama_context_params   params) {
@@ -5508,7 +5514,7 @@ struct llama_context * llama_init_from_model(
         }
     }
 
-    if (model->arch != LLM_ARCH_GLM4_MOE && model->arch != LLM_ARCH_QWEN35 && model->arch != LLM_ARCH_QWEN35MOE && model->arch != LLM_ARCH_GLM_DSA && cparams.mtp != 0) {
+    if (!arch_supports_mtp(model->arch) && cparams.mtp != 0) {
         cparams.mtp = 0;
     }
 

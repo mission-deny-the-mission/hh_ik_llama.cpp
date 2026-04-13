@@ -2354,26 +2354,20 @@ class Qwen35Model(Model):
         HF stores value heads grouped by key groups: [g0_v0, g0_v1, g1_v0, g1_v1, ...]
         C++ expects them deinterleaved: [g0_v0, g1_v0, ..., g15_v0, g0_v1, ..., g15_v1]
         """
-        import torch
         n_k_heads = self.hparams.get("linear_num_key_heads", 16)
         n_v_heads = self.hparams.get("linear_num_value_heads", 32)
         gqa_ratio = n_v_heads // n_k_heads
         if gqa_ratio <= 1:
             return data
         size = data.shape[dim]
-        head_v_dim = size // n_v_heads if size > n_v_heads else 1
+        if size % n_v_heads != 0:
+            raise ValueError(f"Cannot deinterleave: size {size} not divisible by n_v_heads {n_v_heads}")
+        head_v_dim = size // n_v_heads
         if data.ndim == 1:
             # 1D per-head vectors: [g0_v0, g0_v1, g1_v0, g1_v1, ...] → [g0_v0, g1_v0, ..., g0_v1, g1_v1, ...]
             return data.reshape(n_k_heads, gqa_ratio).T.contiguous().reshape(-1)
         else:
             # Multi-dim: reshape along the specified dim, deinterleave head groups
-            shape = list(data.shape)
-            shape[dim] = n_k_heads
-            new_dims = list(range(len(shape) + 1))
-            # Insert gqa_ratio dimension after the key-head dimension
-            shape.insert(dim + 1, gqa_ratio * head_v_dim)
-            reshaped = data.reshape(shape)
-            # Split the gqa_ratio*head_v_dim into gqa_ratio and head_v_dim
             shape2 = list(data.shape)
             shape2[dim:dim+1] = [n_k_heads, gqa_ratio, head_v_dim]
             reshaped = data.reshape(shape2)
@@ -2383,7 +2377,6 @@ class Qwen35Model(Model):
 
     def _deinterleave_v_portion(self, data_torch: Tensor, dim: int, q_size: int, k_size: int) -> Tensor:
         """Deinterleave only the V portion of a QKV-concatenated tensor along dim."""
-        import torch
         slices_before = [slice(None)] * dim
         q_part = data_torch[slices_before + [slice(0, q_size)]]
         k_part = data_torch[slices_before + [slice(q_size, q_size + k_size)]]
@@ -2393,7 +2386,6 @@ class Qwen35Model(Model):
 
     def _transform_delta_net_tensor(self, name: str, data_torch: Tensor) -> Tensor:
         """Apply delta-net specific tensor transformations."""
-        import torch
         n_k_heads = self.hparams.get("linear_num_key_heads", 16)
         head_k_dim = self.hparams.get("linear_key_head_dim", 128)
         q_size = n_k_heads * head_k_dim

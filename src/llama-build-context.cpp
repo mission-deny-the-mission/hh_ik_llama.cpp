@@ -1554,11 +1554,14 @@ static ggml_tensor * llm_build_kqv(
     struct ggml_tensor * q = ggml_permute(ctx, q_cur, 0, 2, 1, 3);
     cb(q, "q", il);
 
+    const bool is_mtp_kv_layer = cparams.mtp_op_type != MTP_OP_NONE &&
+                                 hparams.nextn_predict_layers > 0 &&
+                                 static_cast<uint32_t>(il) >= hparams.n_layer - hparams.nextn_predict_layers;
     auto k_cache = lctx.model.hparams.has_kv(il) ? kv.k_l[il]
-                 : (kv.k_l[il] != nullptr) ? kv.k_l[il]  // MTP layer: KV allocated even though has_kv is false
+                 : (is_mtp_kv_layer && kv.k_l[il] != nullptr) ? kv.k_l[il]
                  : lctx.model.hparams.swa_layers[il] ? kv.k_l[hparams.n_layer_kv_from_start-2] : kv.k_l[hparams.n_layer_kv_from_start-1];
     auto v_cache = lctx.model.hparams.has_kv(il) ? kv.v_l[il]
-                 : (kv.v_l[il] != nullptr) ? kv.v_l[il]  // MTP layer: KV allocated even though has_kv is false
+                 : (is_mtp_kv_layer && kv.v_l[il] != nullptr) ? kv.v_l[il]
                  : lctx.model.hparams.swa_layers[il] ? kv.v_l[hparams.n_layer_kv_from_start-2] : kv.v_l[hparams.n_layer_kv_from_start-1];
 
     struct ggml_tensor * k =
@@ -4589,80 +4592,7 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
         const int il = hparams.n_layer - 1;
         const auto & mtp_layer = model.layers[il];
 
-        // Inline MTP tail with gated attention for Qwen3.5
-        ggml_tensor * KQ_mask_mtp = build_inp_KQ_mask();
-        ggml_tensor * inp_out_ids_mtp = build_inp_out_ids();
-
-        // Token embedding for MTP
-        ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens ? mtp_layer.nextn.embed_tokens : model.tok_embd;
-        ggml_tensor * token_emb = build_inp_embd_mtp(mtp_embd_weights);
-
-        ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_emb, hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
-        ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, hidden_states_from_main_model, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
-
-        ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);
-        cb(combined, "mtp_concat", il);
-        cur = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, combined);
-
-        ggml_tensor * inpSA = cur;
-
-        cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.attn_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "attn_norm", il);
-
-        // Self-Attention with gated QKV (Qwen3.5 uses gated attention)
-        {
-            auto [Qcur, Kcur, Vcur, gate] = llm_build_mul_mat_qkv_gated(gf, cur,
-                    mtp_layer.wq, mtp_layer.wk, mtp_layer.wv,
-                    mtp_layer.attn_q_norm, mtp_layer.attn_k_norm, il);
-
-            // RoPE with rope_multi for MROPE/IMROPE
-            int sections[4];
-            std::copy(hparams.rope_sections.begin(), hparams.rope_sections.begin() + GGML_MROPE_SECTIONS, sections);
-            Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, nullptr, n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-            Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, nullptr, n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-
-            cb(Qcur, "Qcur", il);
-            cb(Kcur, "Kcur", il);
-            cb(Vcur, "Vcur", il);
-
-            // KV Cache & Attention
-            cur = llm_build_kv(ctx0, lctx, kv_self, gf,
-                            nullptr, NULL,
-                            Kcur, Vcur, Qcur, KQ_mask_mtp,
-                            n_tokens, kv_head, n_kv,
-                            1.0f/sqrtf(float(n_embd_head)), cb, il);
-
-            // Apply sigmoid gate then wo projection
-            gate = ggml_sigmoid(ctx0, gate);
-            cb(gate, "gate", il);
-            cur = ggml_mul(ctx0, cur, gate);
-            cb(cur, "qkv_gated", il);
-            cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
-            cb(cur, "attn_gated", il);
-        }
-
-        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
-        cb(ffn_inp, "mtp_ffn_inp", il);
-
-        // Dense FFN
-        cur = llm_build_ffn(ctx0, lctx, mtp_layer.ffn_norm, ffn_inp,
-                mtp_layer.ffn_up,   NULL, NULL,
-                mtp_layer.ffn_gate, NULL, NULL,
-                mtp_layer.ffn_down, NULL, NULL,
-                NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true, false);
-        cb(cur, "ffn_out", il);
-
-        cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "result_norm", -1);
-
-        if (inp_out_ids_mtp) {
-            cur = ggml_get_rows(ctx0, cur, inp_out_ids_mtp);
-        }
-
-        ggml_tensor * mtp_head_weights = mtp_layer.nextn.shared_head_head ? mtp_layer.nextn.shared_head_head : model.output;
-        cur = llm_build_lora_mm(lctx, ctx0, mtp_head_weights, cur);
-        cb(cur, "result_output", -1);
+        cur = build_mtp_tail(mtp_layer, hidden_states_from_main_model, n_embd_head, gf, inp_pos, nullptr, true, true);
     } else {
         // Main model: full hybrid model with delta_net
         delta_net delta(lctx, batch);
@@ -4745,80 +4675,7 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         const int il = hparams.n_layer - 1;
         const auto & mtp_layer = model.layers[il];
 
-        // Inline MTP tail with gated attention for Qwen3.5
-        ggml_tensor * KQ_mask_mtp = build_inp_KQ_mask();
-        ggml_tensor * inp_out_ids_mtp = build_inp_out_ids();
-
-        // Token embedding for MTP
-        ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens ? mtp_layer.nextn.embed_tokens : model.tok_embd;
-        ggml_tensor * token_emb = build_inp_embd_mtp(mtp_embd_weights);
-
-        ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_emb, hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
-        ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, hidden_states_from_main_model, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
-
-        ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);
-        cb(combined, "mtp_concat", il);
-        cur = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, combined);
-
-        ggml_tensor * inpSA = cur;
-
-        cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.attn_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "attn_norm", il);
-
-        // Self-Attention with gated QKV (Qwen3.5 uses gated attention)
-        {
-            auto [Qcur, Kcur, Vcur, gate] = llm_build_mul_mat_qkv_gated(gf, cur,
-                    mtp_layer.wq, mtp_layer.wk, mtp_layer.wv,
-                    mtp_layer.attn_q_norm, mtp_layer.attn_k_norm, il);
-
-            // RoPE with rope_multi for MROPE/IMROPE
-            int sections[4];
-            std::copy(hparams.rope_sections.begin(), hparams.rope_sections.begin() + GGML_MROPE_SECTIONS, sections);
-            Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, nullptr, n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-            Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, nullptr, n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-
-            cb(Qcur, "Qcur", il);
-            cb(Kcur, "Kcur", il);
-            cb(Vcur, "Vcur", il);
-
-            // KV Cache & Attention (wo=nullptr, gate applied before wo)
-            cur = llm_build_kv(ctx0, lctx, kv_self, gf,
-                            nullptr, NULL,
-                            Kcur, Vcur, Qcur, KQ_mask_mtp,
-                            n_tokens, kv_head, n_kv,
-                            1.0f/sqrtf(float(n_embd_head)), cb, il);
-
-            // Apply sigmoid gate then wo projection
-            gate = ggml_sigmoid(ctx0, gate);
-            cb(gate, "gate", il);
-            cur = ggml_mul(ctx0, cur, gate);
-            cb(cur, "qkv_gated", il);
-            cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
-            cb(cur, "attn_gated", il);
-        }
-
-        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
-        cb(ffn_inp, "mtp_ffn_inp", il);
-
-        // Dense FFN
-        cur = llm_build_ffn(ctx0, lctx, mtp_layer.ffn_norm, ffn_inp,
-                mtp_layer.ffn_up,   NULL, NULL,
-                mtp_layer.ffn_gate, NULL, NULL,
-                mtp_layer.ffn_down, NULL, NULL,
-                NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true, false);
-        cb(cur, "ffn_out", il);
-
-        cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "result_norm", -1);
-
-        if (inp_out_ids_mtp) {
-            cur = ggml_get_rows(ctx0, cur, inp_out_ids_mtp);
-        }
-
-        ggml_tensor * mtp_head_weights = mtp_layer.nextn.shared_head_head ? mtp_layer.nextn.shared_head_head : model.output;
-        cur = llm_build_lora_mm(lctx, ctx0, mtp_head_weights, cur);
-        cb(cur, "result_output", -1);
+        cur = build_mtp_tail(mtp_layer, hidden_states_from_main_model, n_embd_head, gf, inp_pos, nullptr, true, true);
     } else {
         // Main model: full hybrid model with delta_net
         delta_net delta(lctx, batch);
@@ -8393,7 +8250,8 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
     struct ggml_cgraph * gf,
     struct ggml_tensor * inp_pos,
     struct ggml_tensor * rope_cache,
-    bool use_dense_ffn
+    bool use_dense_ffn,
+    bool use_gated_attention
 ) {
     const int il = hparams.n_layer - 1;
 
@@ -8421,13 +8279,45 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
 
     // Self-Attention
     {
+        ggml_tensor * gate = nullptr;
+        if (use_gated_attention) {
+            auto [Qcur, Kcur, Vcur, g] = llm_build_mul_mat_qkv_gated(gf, cur,
+                    mtp_layer.wq, mtp_layer.wk, mtp_layer.wv,
+                    mtp_layer.attn_q_norm, mtp_layer.attn_k_norm, il);
+            gate = g;
+
+            // RoPE (gated attention always uses MROPE/IMROPE for Qwen3.5)
+            int sections[4];
+            std::copy(hparams.rope_sections.begin(), hparams.rope_sections.begin() + GGML_MROPE_SECTIONS, sections);
+            Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, nullptr, n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+            Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, nullptr, n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+
+            cb(Qcur, "Qcur", il);
+            cb(Kcur, "Kcur", il);
+            cb(Vcur, "Vcur", il);
+
+            // KV Cache & Attention (wo=nullptr, gate applied before wo)
+            cur = llm_build_kv(ctx0, lctx, kv_self, gf,
+                            nullptr, NULL,
+                            Kcur, Vcur, Qcur, KQ_mask,
+                            n_tokens, kv_head, n_kv,
+                            1.0f/sqrtf(float(n_embd_head)), cb, il);
+
+            // Apply sigmoid gate then wo projection
+            gate = ggml_sigmoid(ctx0, gate);
+            cb(gate, "gate", il);
+            cur = ggml_mul(ctx0, cur, gate);
+            cb(cur, "qkv_gated", il);
+            cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
+            cb(cur, "attn_gated", il);
+        } else {
         auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
-                nullptr, nullptr, // wqkv, bqkv (not used in GLM usually?)
-                nullptr, nullptr, // wqk, bqk
+                nullptr, nullptr,
+                nullptr, nullptr,
                 mtp_layer.wq, mtp_layer.bq,
                 mtp_layer.wk, mtp_layer.bk,
                 mtp_layer.wv, mtp_layer.bv,
-                mtp_layer.attn_q_norm, mtp_layer.attn_k_norm, 
+                mtp_layer.attn_q_norm, mtp_layer.attn_k_norm,
                 0.f, il);
 
         // RoPE
@@ -8454,6 +8344,7 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
                         Kcur, Vcur, Qcur, KQ_mask,
                         n_tokens, kv_head, n_kv,
                         1.0f/sqrtf(float(n_embd_head)), cb, il);
+        } // else (non-gated attention)
     }
 
     ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);

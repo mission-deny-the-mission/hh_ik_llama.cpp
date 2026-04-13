@@ -451,6 +451,7 @@ llm_expert_gating_func_type   gating_op,
         struct ggml_cgraph * gf,
         struct ggml_tensor * inp_pos,
         struct ggml_tensor * rope_cache,
-        bool use_dense_ffn = false
+        bool use_dense_ffn = false,
+        bool use_gated_attention = false
     );
 };

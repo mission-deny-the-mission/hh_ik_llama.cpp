@@ -493,22 +493,23 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
 
-                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
+                // Shared Qwen3.5 hparams loading
+                auto load_qwen35_common = [&]() {
+                    ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
 
-                // Load linear attention (gated delta net) parameters
-                ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
-                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
-                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
-                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
-                ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+                    // Load linear attention (gated delta net) parameters
+                    ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+                    ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                    ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                    ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                    ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
-                // NextN/MTP parameters
-                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
-                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+                    // NextN/MTP parameters
+                    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                    hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
 
-                // Mark recurrent layers (linear attention layers)
-                // Nextn layers are always full attention, not recurrent
-                {
+                    // Mark recurrent layers (linear attention layers)
+                    // Nextn layers are always full attention, not recurrent
                     uint32_t full_attn_interval = 4;
                     ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
                     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
@@ -518,7 +519,8 @@ void llm_load_hparams(
                             hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
                         }
                     }
-                }
+                };
+                load_qwen35_common();
 
                 switch (hparams.n_layer - hparams.nextn_predict_layers) {
                     case 40: model.type = e_model::MODEL_35B_A3B; break;
@@ -530,22 +532,24 @@ void llm_load_hparams(
         case LLM_ARCH_QWEN35:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
-                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
 
-                // Load linear attention (gated delta net) parameters
-                ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
-                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
-                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
-                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
-                ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+                // Shared Qwen3.5 hparams loading
+                auto load_qwen35_common = [&]() {
+                    ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
 
-                // NextN/MTP parameters
-                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
-                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+                    // Load linear attention (gated delta net) parameters
+                    ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+                    ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                    ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                    ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                    ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
-                // Mark recurrent layers (linear attention layers)
-                // Nextn layers are always full attention, not recurrent
-                {
+                    // NextN/MTP parameters
+                    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                    hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+
+                    // Mark recurrent layers (linear attention layers)
+                    // Nextn layers are always full attention, not recurrent
                     uint32_t full_attn_interval = 4;
                     ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
                     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
@@ -555,7 +559,8 @@ void llm_load_hparams(
                             hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
                         }
                     }
-                }
+                };
+                load_qwen35_common();
 
                 switch (hparams.n_layer - hparams.nextn_predict_layers) {
                     case 24: model.type = hparams.n_embd == 1024 ? e_model::MODEL_0_8B : e_model::MODEL_2B; break;
